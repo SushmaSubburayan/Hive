@@ -1,0 +1,367 @@
+ADD JAR /opt/cloudera/parcels/CDH/lib/hive/lib/hive-hcatalog-core-1.1.0-cdh5.11.2.jar;
+
+SET hive.exec.max.dynamic.partitions=100000;
+SET hive.exec.max.dynamic.partitions.pernode=100000;
+
+----------------------------------------------------------------------------------------------------------------------------------------
+--Dropping the table if it already exists
+
+drop table nyc_yellowtaxi_trip_sp;
+---------------------------------------------------------------------------------------------------------------------------------------- 
+--Creating external table for storing the data of the trips made by yellow taxi
+
+create external table if not exists nyc_yellowtaxi_trip_sp(VendorID int, tpep_pickup_datetime timestamp,
+tpep_dropoff_datetime timestamp, Passenger_count int, Trip_distance double, RateCodeID int,Store_and_fwd_flag string,
+PULocationID int, DOLocationID int,Payment_type int,Fare_amount double,Extra double,MTA_tax double,Tip_amount double,
+Tolls_amount double,Improvement_surcharge double,Total_amount double) ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
+location '/common_folder/nyc_taxi_data/'
+tblproperties ("skip.header.line.count"="1");
+----------------------------------------------------------------------------------------------------------------------------------------
+--Checking the number records in the data set
+
+select count(*) from nyc_yellowtaxi_trip_sp;
+
+--There are in total 1174569 records in the data set
+-----------------------------------------------------------------------------------------------------
+--Checking the records in the data sets
+
+Select * from nyc_yellowtaxi_trip_sp limit 10;
+
+------------------------------------------------------------------------------------------------------------------------------------------------
+---------------------------------------Basic Data Quality Checks--------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------------------------
+--Checking if there are any null values in the data set
+
+Select count(*) from nyc_yellowtaxi_trip_sp where VendorID=NULL or tpep_pickup_datetime=NULL or
+tpep_dropoff_datetime=NULL or Passenger_count=NULL or Trip_distance=NULL or RateCodeID=NULL or Store_and_fwd_flag=NULL or
+PULocationID=NULL or DOLocationID=NULL or Payment_type=NULL or Fare_amount=NULL or Extra=NULL or MTA_tax=NULL or Tip_amount=NULL or
+Tolls_amount=NULL or Improvement_surcharge=NULL or Total_amount=NULL;
+
+---There are no records with NULL values in the data set
+
+-------------------------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------------------------- 
+--1.How many records has each TPEP provider provided? Write a query that summarises the number of records of each provider.
+-------------------------------------------------------------------------------------------------------------------------------------------------
+select count(*),vendorid from nyc_yellowtaxi_trip_sp group by vendorid;
+
+---Below are the number records provided by each TPEP provider
+---Vendor 1:Creative Mobile Technologies, LLC:527386
+---Vendor 2:VeriFone Inc.:647183
+
+--------------------------------------------------------------------------------------------------------------------------------------------------
+----2.The data provided is for months November and December only. Check whether the data is consistent, and if not, identify the data quality issues.
+--------------------------------------------------------------------------------------------------------------------------------------------------
+select distinct YEAR(tpep_pickup_datetime) from nyc_yellowtaxi_trip_sp;
+
+select distinct YEAR(tpep_dropoff_datetime) from nyc_yellowtaxi_trip_sp;
+
+select distinct MONTH(tpep_pickup_datetime) from nyc_yellowtaxi_trip_sp;
+
+select distinct MONTH(tpep_dropoff_datetime) from nyc_yellowtaxi_trip_sp;
+
+---Data set contains data from 
+---Months:October,November,December,January and April  
+---Years:2003,2008,2009,2017,2018 and 2019
+---which is invalid according to the problem statement
+
+select count(*) from nyc_yellowtaxi_trip_sp where YEAR(tpep_pickup_datetime)!=2017 or YEAR(tpep_dropoff_datetime) not in (2017,2018) or 
+MONTH(tpep_pickup_datetime) not in (11,12) or MONTH(tpep_dropoff_datetime) not in (11,12,1);
+
+---Data set contains 15 records of data which is not from November or December 2017
+
+
+select count(*) from nyc_yellowtaxi_trip_sp where tpep_dropoff_datetime<=tpep_pickup_datetime;
+
+---Data set contains 6555 records of data in which drop off time is less than or equal to pick up time
+
+---------------------------------------------------------------------------------------------------------------------------------------------------
+------Can you conclude which vendor is doing a bad job in providing the records using different columns of the dataset?
+---------------------------------------------------------------------------------------------------------------------------------------------------
+---Checking the available vendor ids in the data set
+
+Select distinct vendorid from nyc_yellowtaxi_trip_sp;
+
+---There are two vendor with ids 1 and 2 as mentioned in the data dictionary
+
+--------------------Checking all the fields for data consistency---------------------------------------
+--Assumptions:
+--1.There can be trips with Extra,MTA_tax,Improvement_surcharge,Tip_amount,Tolls_amount as zero
+--2.Considered trips with trip distance>0 only
+--3.Considered trips with passenger count>0 only
+--4.Pick up location and drop off location can be same for the trips 
+--5.Pick up time of the trips is always less than drop off time 
+--6.Considered trips which has pick up time in November/December,2017 only.
+--7.total_amount=fare_amount+extra+mta_extra+improvement_surcharge+tip_amount+tolls_amount
+--8.Total amount and tip amount does not include cash tips 
+--9.Excluded only cash tips
+-----------------------------------Vendor Id 1---------------------------------------------------------
+
+select count(*) from nyc_yellowtaxi_trip_sp where vendorid=1 and 
+((YEAR(tpep_pickup_datetime)!=2017 or YEAR(tpep_dropoff_datetime) not in (2017,2018) or 
+MONTH(tpep_pickup_datetime) not in (11,12) or MONTH(tpep_dropoff_datetime) not in (11,12,1))
+or
+Trip_distance<=0
+or
+(Trip_distance>0 and 
+tpep_pickup_datetime>=tpep_dropoff_datetime)
+or
+passenger_count<=0 
+or
+RateCodeID not in (1,2,3,4,5,6) 
+or
+Store_and_fwd_flag not in ('Y','N')
+or
+payment_type not in (1,2,3,4,5,6) 
+or
+fare_amount<=0 
+or
+Extra not in (0.5,1,0)
+or
+mta_tax not in (0.5,0) 
+or
+Improvement_surcharge not in (0.3,0) 
+or
+Total_amount<=0
+or
+total_amount!=fare_amount+extra+mta_tax+improvement_surcharge+tip_amount+tolls_amount);
+
+--Data provided by vendor with id 1 has 88491 records with erroneous data 
+
+-----------------------------------Vendor Id 2---------------------------------------------------------
+
+select count(*) from nyc_yellowtaxi_trip_sp where vendorid=2 and 
+((YEAR(tpep_pickup_datetime)!=2017 or YEAR(tpep_dropoff_datetime) not in (2017,2018) or 
+MONTH(tpep_pickup_datetime) not in (11,12) or MONTH(tpep_dropoff_datetime) not in (11,12,1))
+or
+Trip_distance<=0
+or
+(Trip_distance>0 and 
+tpep_pickup_datetime>=tpep_dropoff_datetime)
+or
+passenger_count<=0 
+or
+RateCodeID not in (1,2,3,4,5,6) 
+or
+Store_and_fwd_flag not in ('Y','N')
+or
+payment_type not in (1,2,3,4,5,6) 
+or
+fare_amount<=0 
+or
+Extra not in (0.5,1,0)
+or
+mta_tax not in (0.5,0) 
+or
+Improvement_surcharge not in (0.3,0) 
+or
+Total_amount<=0
+or
+total_amount!=fare_amount+extra+mta_tax+improvement_surcharge+tip_amount+tolls_amount);
+
+--Data provided by vendor with id 2 has 98231 records with erroneous data
+
+--As the number of erroneous records provided by vendor with id 2(VeriFone Inc.) is more than number of erroneous records provided 
+--by vendor with id 1(VeriFone IncCreative Mobile Technologies),vendor with id 2(VeriFone Inc.)is doing a bad job in providing the records.
+-------------------------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------------------------
+--Creating a clean, ORC partitioned table for analysis. Remove all the erroneous rows.
+------------------------------------------------------------------------------------------------------------------------------------------------
+--Dropping table if already exists
+
+drop table nyc_yellowtaxi_trip_partitioned_orc_sp;
+------------------------------------------------------------------------------------------------------------------------------------------------
+--Creating ORC partitioned table
+create external table if not exists nyc_yellowtaxi_trip_partitioned_orc_sp
+(VendorID int, tpep_pickup_datetime timestamp,
+tpep_dropoff_datetime timestamp, Passenger_count int, Trip_distance double, RateCodeID int,Store_and_fwd_flag string,
+PULocationID int, DOLocationID int,Payment_type int,Fare_amount double,Extra double,MTA_tax double,Tip_amount double,
+Tolls_amount double,Improvement_surcharge double,Total_amount double) partitioned by (mnth int,vendor int)
+stored as orc location '/user/podishetti.sushma_gmail'
+tblproperties ("orc.compress"="SNAPPY");
+
+--Inserting values into the ORC partitioned table
+insert overwrite table nyc_yellowtaxi_trip_partitioned_orc_sp partition(mnth,vendor)
+select VendorID, tpep_pickup_datetime,tpep_dropoff_datetime, Passenger_count,Trip_distance,RateCodeID ,Store_and_fwd_flag,
+PULocationID , DOLocationID ,Payment_type ,Fare_amount ,Extra ,MTA_tax ,Tip_amount,Tolls_amount,Improvement_surcharge,Total_amount,
+month(MONTH(tpep_pickup_datetime)) as mnth,VendorID as vendor from nyc_yellowtaxi_trip_sp 
+where 
+!((YEAR(tpep_pickup_datetime)!=2017 or YEAR(tpep_dropoff_datetime) not in (2017,2018) or 
+MONTH(tpep_pickup_datetime) not in (11,12) or MONTH(tpep_dropoff_datetime) not in (11,12,1))
+or
+Trip_distance<=0
+or
+(Trip_distance>0 and 
+tpep_pickup_datetime>=tpep_dropoff_datetime)
+or
+passenger_count<=0 
+or
+RateCodeID not in (1,2,3,4,5,6) 
+or
+Store_and_fwd_flag not in ('Y','N')
+or
+payment_type not in (1,2,3,4,5,6) 
+or
+fare_amount<=0 
+or
+Extra not in (0.5,1,0)
+or
+mta_tax not in (0.5,0) 
+or
+Improvement_surcharge not in (0.3,0) 
+or
+Total_amount<=0
+or
+total_amount!=fare_amount+extra+mta_tax+improvement_surcharge+tip_amount+tolls_amount);
+
+--Checking the records of the orc partitioned table
+
+Select count(*) from nyc_yellowtaxi_trip_partitioned_orc_sp;
+
+--There are in total 987847 records after removing erroneous data
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+--Analysis - I
+----------------------------------------------------------------------------------------------------------------------------------------------------
+--1.Compare the overall average fare per trip for November and December.
+---------------------------------------------------------------------------------------------------------------------------------------------------
+
+Select avg(fare_amount),MONTH(tpep_pickup_datetime) from nyc_yellowtaxi_trip_partitioned_orc_sp group by MONTH(tpep_pickup_datetime);
+
+--The avg fare per trip for November is higher compared to December
+--The difference between avg fare per trip for November and December is not very significant.
+--Nov:12.2420
+--Dec:12.0749
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+--2.Explore the ‘number of passengers per trip’ - how many trips are made by each level of ‘Passenger_count’? Do most people travel solo or with other people?
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Select count(*),passenger_count from nyc_yellowtaxi_trip_partitioned_orc_sp group by passenger_count;
+
+--The number of trips with passenger count 1 is high compared to the number of trips with passenger count>
+--so,most of the people travel solo
+
+--  699497	1
+--  149491	2
+--	 42942	3
+--	 21500	4
+--	 46304	5
+-- 	 28110	6
+--	     3	7
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+--3.Which is the most preferred mode of payment?
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Select count(*),Payment_type from nyc_yellowtaxi_trip_partitioned_orc_sp group by Payment_type;
+
+--The number of trips with Credit card as the mode of payment is high compared to the number of trips with other modes of payment
+--so,payment type 1(Credit card) is the most preferred mode of payment
+--  622872	1 
+--	359395	2
+--	  4332	3
+--    1248	4
+ 
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+--4.What is the average tip paid per trip? Compare the average tip with the 25th, 50th and 75th percentiles and comment whether the ‘average tip’ 
+--is a representative statistic (of the central tendency) of ‘tip amount paid’
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Select avg(tip_amount) from nyc_yellowtaxi_trip_partitioned_orc_sp;
+
+Select percentile_approx(tip_amount, 0.25) from nyc_yellowtaxi_trip_partitioned_orc_sp;
+Select percentile_approx(tip_amount, 0.50) from nyc_yellowtaxi_trip_partitioned_orc_sp;
+Select percentile_approx(tip_amount, 0.75) from nyc_yellowtaxi_trip_partitioned_orc_sp;
+
+
+--Average tip amount:1.6169
+--25th Percentile:0
+--50th Percentile:1.1068
+--75th Percentile:2.1888
+
+--Average tip amount is not equal to 50th percentile,so average tip is not a good representative (of the central tendency) of ‘tip amount paid’ 
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+--5.Explore the ‘Extra’ (charge) variable - what fraction of total trips have an extra charge is levied?
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Select count(*) from nyc_yellowtaxi_trip_partitioned_orc_sp where extra>0
+
+-- Extra charge was levied for 457009 trips
+
+Select count(*) from nyc_yellowtaxi_trip_partitioned_orc_sp
+
+-- Total number of trips 987847
+
+Select sum(if(extra>0,1,0))/count(*) from nyc_yellowtaxi_trip_partitioned_orc_sp;
+
+--For 0.4626 fraction of trips extra charge was levied
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+Analysis-II
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+--1.What is the correlation between the number of passengers on any given trip, and the tip paid per trip? Do multiple travellers 
+--tip more compared to solo travellers?Hint: Use CORR(Col_1, Col_2)
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+Select corr(passenger_count,tip_amount) from nyc_yellowtaxi_trip_partitioned_orc_sp;
+
+--The correlation between number of passengers and tip paid is 	-0.00864,which means the number of passengers and tip amount are 
+--inversely correlated and the correlation is not very significant as the value is very small.
+--No,multiple travellers tip less compared to solo travellers
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+--2.Segregate the data into five segments of ‘tip paid’: [0-5), [5-10), [10-15) , [15-20) and >=20. Calculate the percentage share of each bucket 
+--(i.e. the fraction of trips falling in each bucket).
+---------------------------------------------------------------------------------------------------------------------------------------------------
+Select (sum(if(tip_amount>=0 and tip_amount<5,1,0))/count(*))*100 as bucket_1,(sum(if(tip_amount>=5 and tip_amount<10,1,0))/count(*))*100 as bucket_2,
+(sum(if(tip_amount>=10 and tip_amount<15,1,0))/count(*))*100 as bucket_3,(sum(if(tip_amount>=15 and tip_amount<20,1,0))/count(*))*100 as bucket_4,
+(sum(if(tip_amount>=20,1,0))/count(*))*100 as bucket_5 from nyc_yellowtaxi_trip_partitioned_orc_sp;
+
+--Percentage share of each bucket :
+--Bucket_1 [0-5): 93.76856942421246
+--Bucket_2 [5-10): 4.479033696513731
+--Bucket_3 [10-15): 1.493956047849515
+--Bucket_4 [15-20): 0.16925698007889886
+--Bucket_5 >=20: 0.08918385134540066
+
+---------------------------------------------------------------------------------------------------------------------------------------------------
+--3.Which month has a greater average ‘speed’ - November or December? Note that the variable ‘speed’ will have to be derived from other metrics. 
+---------------------------------------------------------------------------------------------------------------------------------------------------
+Select avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)),MONTH(tpep_pickup_datetime) 
+from nyc_yellowtaxi_trip_partitioned_orc_sp group by MONTH(tpep_pickup_datetime);
+
+--The avg speed of the trips in November and December months:
+--November:10.804
+--December:10.898
+
+--December month has a greater average speed
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+--4.Analyse the average speed of the most happening days of the year, i.e. 31st December (New year’s eve) and 25th December (Christmas) and
+--compare it with the overall average.
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+Select avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)),MONTH(tpep_pickup_datetime),
+DAY(tpep_pickup_datetime) from nyc_yellowtaxi_trip_partitioned_orc_sp where (MONTH(tpep_pickup_datetime)=12 and DAY(tpep_pickup_datetime) in (25,31)) and 
+(MONTH(tpep_dropoff_datetime) in (12,1) and DAY(tpep_dropoff_datetime) in (25,31,1)) group by MONTH(tpep_pickup_datetime), DAY(tpep_pickup_datetime);
+
+--The avg speed of the trips on the of the most happening days of the year is:
+--December 25th:14.969
+--December 31st:13.037
+
+
+Select avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)),MONTH(tpep_pickup_datetime) 
+from nyc_yellowtaxi_trip_partitioned_orc_sp where (MONTH(tpep_pickup_datetime)=12 and DAY(tpep_pickup_datetime) in (25,31)) and 
+(MONTH(tpep_dropoff_datetime) in (12,1) and DAY(tpep_dropoff_datetime) in (25,31,1)) group by MONTH(tpep_pickup_datetime);
+
+--The avg speed of the trips on the of the most happening days of the year is : 13.767
+
+Select avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)) 
+from nyc_yellowtaxi_trip_partitioned_orc_sp where MONTH(tpep_pickup_datetime)=12;
+
+--The overall avg speed of the trips in December is 10.898
+
+Select avg(trip_distance/((unix_timestamp(tpep_dropoff_datetime)-unix_timestamp(tpep_pickup_datetime))/3600)) 
+from nyc_yellowtaxi_trip_partitioned_orc_sp ;
+
+--The overall avg speed of all the trips is 10.8518
+
+--The avg speed of the trips on the most happening days of the year is greater than overall avg speed of the trips in December
+--The avg speed of the trips on the most happening days of the year is greater than overall avg speed of all the trips
+------------------------------------------------------------------------------------------------------------------------------------------------------
